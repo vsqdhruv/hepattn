@@ -1,13 +1,13 @@
-from argparse import ArgumentParser
-from pathlib import Path
+from argparse import ArgumentParser   # handles comman-line args(-i, -o, --overwrite)
+from pathlib import Path              # safer filesytem path operations
 
 import pandas as pd
 
-from hepattn.experiments.trackml import cluster_features
+from hepattn.experiments.trackml import cluster_features 
 
-# A script for preprocessing TrackML CSV files into parquet binary files
+#### A script for preprocessing TrackML CSV files into parquet binary files ####
 
-
+# checks that file exists and is not empty
 def is_valid_file(path):
     path = Path(path)
     return path.is_file() and path.stat().st_size > 0

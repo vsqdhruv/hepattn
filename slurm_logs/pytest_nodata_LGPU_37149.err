@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/bin/pytest", line 10, in <module>
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/config/__init__.py", line 201, in console_main
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/config/__init__.py", line 175, in main
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_hooks.py", line 512, in __call__
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_manager.py", line 120, in _hookexec
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 167, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 121, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/main.py", line 324, in wrap_session
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_hooks.py", line 512, in __call__
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_manager.py", line 120, in _hookexec
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 167, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 139, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 139, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 139, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/pluggy/_callers.py", line 121, in _multicall
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/cacheprovider.py", line 475, in pytest_sessionfinish
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/site-packages/_pytest/cacheprovider.py", line 193, in set
+  File "/home/xzcapnai/hepattn/hepattn/.pixi/envs/default/lib/python3.12/pathlib.py", line 1014, in open
+MemoryError
+srun: error: compute-gpu-0-0: task 0: Exited with exit code 1

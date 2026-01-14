@@ -37,6 +37,7 @@ class TrackMLDataset(Dataset):
         hit_eval_path: str | None = None,
         dummy_data: bool = False,
     ):
+        
         super().__init__()
 
         # Store dummy_data flag
@@ -112,7 +113,8 @@ class TrackMLDataset(Dataset):
     def __len__(self):
         return int(self.num_events)
 
-    # what makes it work like a PyTorch dataset - give index, returns data for the sample (event)
+    # what makes it work like a PyTorch dataset 
+    # give index, returns data for the sample (event)
     def __getitem__(self, idx):
         if self.dummy_data:
             return self._generate_dummy_data(idx)
@@ -136,7 +138,7 @@ class TrackMLDataset(Dataset):
             # Valid mask is all True for the feature-specific subset
             inputs[f"{feature}_valid"] = torch.full((len(feature_hits),), True).unsqueeze(0)
             targets[f"{feature}_valid"] = inputs[f"{feature}_valid"]
-            
+
             for field in fields:
                 inputs[f"{feature}_{field}"] = torch.from_numpy(feature_hits[field].values).unsqueeze(0).half()
 

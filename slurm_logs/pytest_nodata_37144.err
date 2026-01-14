@@ -1,0 +1,15 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"apptainer"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore-cache load "apptainer"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+srun: error: compute-0-1: task 0: Exited with exit code 1
+[91mERROR  : Failed to create user namespace: user namespace disabled
+[0m

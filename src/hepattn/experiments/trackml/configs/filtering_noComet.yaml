@@ -1,10 +1,10 @@
 seed_everything: 42
-name: hit-filter-v1
+name: HF-v1
 
 data:
-  train_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/prepped/train
-  val_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/prepped/val
-  test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/prepped/test
+  train_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/trackml/prepped/prepped/train
+  val_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/trackml/prepped/prepped/val
+  test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/trackml/data/trackml/prepped/prepped/test
 
   num_workers: 10
   num_train: -1
@@ -64,13 +64,13 @@ trainer:
   log_every_n_steps: 50
   default_root_dir: logs
   gradient_clip_val: 0.1
-  enable_progress_bar: True
+  enable_progress_bar: True  
 
-  logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
-    init_args:
-      project: ml-4-track-recon-mu3e
-      workspace: vsqdhruv
+#  logger:
+#    class_path: hepattn.utils.loggers.MyCometLogger
+#    init_args:
+#      project: trackml_filtering
+
 
   callbacks:
     - class_path: hepattn.callbacks.Compile

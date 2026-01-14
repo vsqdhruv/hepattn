@@ -1,3 +1,5 @@
+import comet_ml
+
 from lightning.pytorch.cli import ArgsType
 from torch import nn
 
