@@ -5,42 +5,39 @@ import numpy as np
 import pandas as pd
 import torch
 
-from lightning import LightningDataModule    #PyTorch lightning datamodule wrapper 
+from lightning import LightningDataModule
 from lightning.pytorch.utilities.rank_zero import rank_zero_info
 from torch.utils.data import DataLoader, Dataset
 
-# checks file exists and is not empty
 def is_valid_file(path):
     path = Path(path)
     return path.is_file() and path.stat().st_size > 0
 
-
 class Mu3eDataset(Dataset):
-    # sets up PyTorch dataset for Mu3e data, which events to load, how to filter hits/tracks, handles dummy test data
     def __init__(
         self,
         dirpath: str,
-        inputs: dict,            # dictionary specifying which hit features to include in input tensors
-        targets: dict,           # dictionary specifying which features should be inlcuded as model targets
+        inputs: dict,
+        targets: dict,
         num_events: int = -1,
-        hit_volume_ids: list = None,
-        feature_volume_ids: dict = None,
-        particle_min_num_hits: int = None,              # minimum number of hits a track must have to keep
-        event_max_num_particles=1000,                   # maximum number of hits 
+        hit_volume_ids: list | None = None,
+        feature_volume_ids: dict | None = None,
+        particle_min_num_hits=None,
+        event_max_num_particles=1000,
         strict_max_objects: bool = False,
         hit_eval_path: str | None = None,
-        dummy_data: bool = False,
+        dummy_data: bool = False,    
     ):
         super().__init__()
-        
-        # store dummy_data flag
+
+        # Store dummy_data flag
         self.dummy_data = dummy_data
 
-        # set the global random sampling seed
+        # Set the global random sampling seed
         self.sampling_seed = 42
         np.random.seed(self.sampling_seed)  # noqa: NPY002
 
-        # if using dummy data, skip file-based initialization
+        # If using dummy data, skip file-based initialization
         if self.dummy_data:
             rank_zero_info("Generating dummy data...")
             self.dirpath = Path(dirpath) if dirpath else Path()
@@ -54,23 +51,19 @@ class Mu3eDataset(Dataset):
             self.particle_min_num_hits = particle_min_num_hits
             self.event_max_num_particles = event_max_num_particles
             return
-        
-        # list of event names for mu3e parquet files
-        hit_file_path = Path(dirpath) / 'all_hits.parquet'
-        event_id_series = pd.read_parquet(hit_file_path, columns=['eventID'])['eventID']
-        
-        # get unique and sorted eventIDs
-        unique_event_ids = event_id_series.unique()
-        unique_event_ids.sort()
-        
-        # create standarised event names and sample ids
-        event_names = [f'event{ID:09d}' for ID in unique_event_ids]
-        sample_ids = unique_event_ids.tolist()
 
-        # calculate the number of events that will actually be used
-        num_events_available = len(event_names)
-        
-        # sanity checks 
+        # loading in event data
+        self.dirpath = Path(dirpath)
+        self.all_hits = pd.read_parquet(self.dirpath / Path("all_hits.parquet"))
+        self.all_tracks = pd.read_parquet(self.dirpath / Path("all_tracks.parquet"))
+
+        hits_counts = self.all_hits.groupby('eventID').size()
+        particles_counts = self.all_tracks.groupby('eventID').size()
+
+        valid_events = sorted(hits_counts.index.intersection(particles_counts.index).to_list())
+        event_names = [f'event{ID:09d}' for ID in valid_events]
+        num_events_available = len(valid_events)
+
         if num_events > num_events_available:
             msg = f"Requested {num_events} events, but only {num_events_available} are available in the directory {dirpath}."
             raise ValueError(msg)
@@ -81,133 +74,57 @@ class Mu3eDataset(Dataset):
         if num_events == 0:
             raise ValueError("num_events must be greater than 0")
 
-        # metadata
-        self.dirpath = Path(dirpath)
+        self.sample_ids = valid_events[:num_events]
+
+        # Metadata
         self.hit_eval_path = hit_eval_path
         self.inputs = inputs
         self.targets = targets
         self.num_events = num_events
         self.event_names = event_names[:num_events]
-        self.sample_ids = sample_ids[:num_events]
-        
-        self.all_hits = pd.read_parquet(self.dirpath / Path("all_hits.parquet"))
-        self.all_tracks = pd.read_parquet(self.dirpath / Path("all_tracks.parquet"))
 
-        #global_hit_files = Path(dirpath).glob("all_hits*.parquet")
-        #global_track_files = Path(dirpath).glob("all_tracks*.parquet")
-
-        #self.all_hits_list = [pd.read_parquet(p) for p in global_hit_files]
-        #self.all_tracks_list = [pd.read_parquet(p) for p in global_track_files]
-        
-        # setup hit eval file if specified
+        # Setup hit eval file if specified
         if self.hit_eval_path:
             rank_zero_info(f"Using hit eval dataset {self.hit_eval_path}")
-            
-        # store filtering parameters # 
-        
-        # hit level cuts
+
+        # Hit level cuts
         self.hit_volume_ids = hit_volume_ids
-        
-        # optional per-feature hit volume selections
+        # Optional per-feature hit volume selections
         self.feature_volume_ids = feature_volume_ids
-        
-        # track level cuts
+
+        # Particle level cuts
         self.particle_min_num_hits = particle_min_num_hits
 
-        # event level cuts
+        # Event level cuts
         self.event_max_num_particles = event_max_num_particles
         self.strict_max_objects = strict_max_objects
-    
+
     def __len__(self):
         return int(self.num_events)
     
-    def __getitem__(self, idx):
-        if self.dummy_data:
-            return self._generate_dummy_data(idx)
-
-        # prepare containers
-        inputs = {}
-        targets = {}
-
-        # load the event
-        hits, particles = self.load_event(idx)
-        num_particles = len(particles)
-        
-        # build the input hits
-        for feature, fields in self.inputs.items():
-            feature_hits = hits
-
-            # valid mask is all True for the feature-specific subset
-            inputs[f"{feature}_valid"] = torch.full((len(feature_hits),), True).unsqueeze(0)
-            targets[f"{feature}_valid"] = inputs[f"{feature}_valid"]
-            
-            for field in fields:
-                inputs[f"{feature}_{field}"] = torch.from_numpy(feature_hits[field].values).unsqueeze(0).half()
-
-        # create the targets for whether a track slot is used or not
-        if num_particles > self.event_max_num_particles:
-            if self.strict_max_objects:
-                message = f"Event {idx} has {num_particles}, but limit is {self.event_max_num_particles}"
-                raise ValueError(message)
-            particles = particles.iloc[: self.event_max_num_particles]
-            num_particles = self.event_max_num_particles
-            
-        # create track_valid mask by concatenating True and False arrays
-        num_padding = self.event_max_num_particles - num_particles
-        targets["particle_valid"] = torch.cat([torch.full((num_particles,), True), torch.full((num_padding,), False)]).unsqueeze(0)
-
-        # create the mask targets
-        #selected_particle_ids = torch.from_numpy(particles["trackID"].values)
-        #particle_ids = torch.cat([selected_particle_ids, torch.full((num_padding,), -999)])
-        #hit_particle_ids = torch.from_numpy(hits["trackID"].values)
-        #targets["particle_hit_valid"] = (particle_ids.unsqueeze(-1) == hit_particle_ids.unsqueeze(-2)).unsqueeze(0)
-
-        # create mask targets
-        particle_idx = torch.full((self.event_max_num_particles,), -1)
-        particle_idx[:num_particles] = torch.arange(num_particles)
-        hit_particle_idx = torch.from_numpy(hits["particle_idx"].values)
-        targets["particle_hit_valid"] = (particle_idx.unsqueeze(-1) == hit_particle_idx.unsqueeze(-2)).unsqueeze(0)
-        
-        # create the hit filter targets (note this ignores the event_max_num_tracks filtering)
-        for target_feature, fields in self.targets.items():
-            if "on_valid_particle" in fields:
-                targets[f"{target_feature}_on_valid_particle"] = torch.from_numpy(hits["on_valid_particle"].to_numpy()).unsqueeze(0)
-
-        # Add sample ID
-        targets["sample_id"] = torch.tensor([self.sample_ids[idx]], dtype=torch.int32)
-
-        # Build the regression targets
-        if "particle" in self.targets:
-            for field in self.targets["particle"]:
-                # Null target/track slots are filled with nans
-                x = torch.full((self.event_max_num_particles,), torch.nan)
-                x[:num_particles] = torch.from_numpy(particles[field].to_numpy()[: self.event_max_num_particles])
-                targets[f"particle_{field}"] = x.unsqueeze(0)
-
-        return inputs, targets
-
     def load_event(self, idx):
         sample_id = self.sample_ids[idx]
-        event_name = self.event_names[idx]
 
-        # load data for the specific event
-        hits = self.all_hits[self.all_hits['eventID'] == sample_id]
-        particles = self.all_tracks[self.all_tracks['eventID'] == sample_id]
-        
-        # make the detector volume selection
+        hits = self.all_hits[self.all_hits['eventID'] == sample_id].copy()
+        particles = self.all_tracks[self.all_tracks['eventID'] == sample_id].copy()
+
+        # Make the detector volume selection
         if self.hit_volume_ids:
-            hits = hits[hits["det"].isin(self.hit_volume_ids)]
+            hits = hits[hits["det"].isin(self.hit_volume_ids)].copy()
 
-        # add extra hit fields (geometric features)
+        #for coord in ["x", "y", "z"]:
+        #    hits[coord] *= 0.01
+            
+        # Add extra hit fields
         hits["r"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2)
         hits["s"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2 + hits["z"] ** 2)
-        hits["lambda"] = np.arccos(hits["z"] / hits["s"])                       # use our variable lambda
+        hits["lambda"] = np.arccos(hits["z"] / hits["s"])
         hits["phi"] = np.arctan2(hits["y"], hits["x"])
         hits["eta"] = -np.log(np.tan(hits["lambda"] / 2))
         hits["u"] = hits["x"] / (hits["x"] ** 2 + hits["y"] ** 2)
         hits["v"] = hits["y"] / (hits["x"] ** 2 + hits["y"] ** 2)
 
-        # add extra track fields (kinematic features)
+        # Add extra particle fields
         particles["p"] = np.sqrt(particles["px"] ** 2 + particles["py"] ** 2 + particles["pz"] ** 2)
         particles["pt"] = np.sqrt(particles["px"] ** 2 + particles["py"] ** 2)
         particles["eta"] = np.arctanh(particles["pz"] / particles["p"])
@@ -218,30 +135,123 @@ class Mu3eDataset(Dataset):
         particles["cosphi"] = np.cos(particles["phi"])
         particles["sinphi"] = np.sin(particles["phi"])
 
-        # apply track cut based on hit content (minimum hits / naked tracks)
+        # Apply particle cut based on hit content
         counts = hits["trackID"].value_counts()
-        #keep_particle_ids = counts[counts >= self.particle_min_num_hits].index.to_numpy()
-        keep_particle_ids = counts.index.to_numpy()
-        particles = particles[particles["trackID"].isin(keep_particle_ids)].reset_index(drop=True)
+        keep_particle_ids = counts[counts >= self.particle_min_num_hits].index.to_numpy()
+        particles = particles[particles["trackID"].isin(keep_particle_ids)]
 
-        # re-index tracks per event
+        # Re-index tracks per event
         particles["particle_idx"] = np.arange(len(particles))
-        track_id_to_idx = dict(zip(particles['trackID'].values, particles["particle_idx"].values))
+        trackID_to_idx = dict(zip(particles['trackID'].values, particles['particle_idx'].values))
+        assert len(trackID_to_idx) == len(particles), "trackID to particle_idx mapping is not one-to-one"
 
-        hits["particle_idx"] = hits["trackID"].map(track_id_to_idx)
-        hits = hits.dropna(subset=["particle_idx"])
-        hits["particle_idx"] = hits["particle_idx"].astype(int)
+        hits["particle_idx"] = hits["trackID"].map(trackID_to_idx)
+        hits = hits.dropna(subset=['particle_idx'])
+        hits['particle_idx'] = hits['particle_idx'].astype(int)
+        assert hits["particle_idx"].min() >= 0, "particle_idx to hit mapping failed"
+        assert hits["particle_idx"].max() < len(particles), "particle_idx to hit mapping failed"
 
-        # mark which hits are on a valid / reconstructable track, for the hit filter
+        # Mark which hits are on a valid / reconstructable particle, for the hit filter
         hits["on_valid_particle"] = hits["particle_idx"].isin(particles["particle_idx"])
 
-        # sanity checks
+        # Sanity checks
         assert len(particles) != 0, "No particles remaining - loosen selection!"
         assert len(hits) != 0, "No hits remaining - loosen selection!"
-        assert particles["particle_idx"].nunique() == len(particles), "Non-unique track ids"
+        assert particles["trackID"].nunique() == len(particles), "Non-unique particle ids"
 
         return hits, particles
-    
+
+    def __getitem__(self, idx):
+        if self.dummy_data:
+            return self._generate_dummy_data(idx)
+        
+        # Load the event
+        hits, particles = self.load_event(idx)
+        num_particles = len(particles)
+
+        # Truncate particles if above event_max_num_particles
+        if num_particles > self.event_max_num_particles:
+            if self.strict_max_objects:
+                message = f"Event {idx} has {num_particles}, but limit is {self.event_max_num_particles}"
+                raise ValueError(message)
+            particles = particles.iloc[:self.event_max_num_particles]
+            # remove hits pointing to truncated particles
+            valid_particle_idx = set(particles['particle_idx'].values)
+            hits = hits[hits['particle_idx'].isin(valid_particle_idx)].copy()
+
+        num_particles = len(particles)
+        
+        assert hits['particle_idx'].isin(particles['particle_idx']).all(), "Some hits point to particles that were truncated"
+
+        # prepare input and target containers
+        inputs = {}
+        targets = {}
+
+        # Build the input hits
+        for feature, fields in self.inputs.items():
+            feature_hits = hits
+
+            # Valid mask is all True for the feature-specific subset
+            inputs[f"{feature}_valid"] = torch.full((len(feature_hits),), True).unsqueeze(0)
+            targets[f"{feature}_valid"] = inputs[f"{feature}_valid"]
+
+            for field in fields:
+                inputs[f"{feature}_{field}"] = torch.from_numpy(feature_hits[field].values).unsqueeze(0).half()
+
+        # Create particle_valid mask by concatenating True and False arrays
+        num_padding = self.event_max_num_particles - num_particles
+        targets["particle_valid"] = torch.cat([
+            torch.full((num_particles,), True), 
+            torch.full((num_padding,), False)
+        ]).unsqueeze(0)
+
+        # Create the particle_hit_valid mask    
+        particle_idx = torch.full((self.event_max_num_particles,), -1)
+        particle_idx[:num_particles] = torch.arange(num_particles)
+        hit_particle_idx = torch.from_numpy(hits["particle_idx"].values)
+        targets["particle_hit_valid"] = (particle_idx.unsqueeze(-1) == hit_particle_idx.unsqueeze(-2)).unsqueeze(0)
+
+        # Create the hit filter targets (note this ignores the event_max_num_particles filtering)
+        for target_feature, fields in self.targets.items():
+            if "on_valid_particle" in fields:
+                targets[f"{target_feature}_on_valid_particle"] = torch.from_numpy(
+                    hits["on_valid_particle"].to_numpy()
+                ).unsqueeze(0)
+
+        # Add sample ID
+        targets["sample_id"] = torch.tensor([self.sample_ids[idx]], dtype=torch.int32)
+
+        # Build the regression targets
+        if "particle" in self.targets:
+            for field in self.targets["particle"]:
+                # Null target/particle slots are filled with nans
+                # This acts as a sanity check that we correctly mask out null slots in the loss
+                x = torch.full((self.event_max_num_particles,), torch.nan)
+                x[:num_particles] = torch.from_numpy(
+                    particles[field].to_numpy()[: self.event_max_num_particles]
+                )
+                targets[f"particle_{field}"] = x.unsqueeze(0)
+
+        # __getitem__ shape 
+        #print(f"\n[DEBUG __getitem__ idx={idx}]")
+        #for k, v in inputs.items():
+        #    if torch.is_tensor(v):
+        #        print(f"  input[{k}]: {tuple(v.shape)} {v.dtype}")
+        #    elif isinstance(v, dict):
+        #        for kk, vv in v.items():
+        #            if torch.is_tensor(vv):
+        #                print(f"  input[{k}][{kk}]: {tuple(vv.shape)} {vv.dtype}")
+
+        #for k, v in targets.items():
+        #    if torch.is_tensor(v):
+        #        print(f"  target[{k}]: {tuple(v.shape)} {v.dtype}")
+        #    elif isinstance(v, dict):
+        #        for kk, vv in v.items():
+        #            if torch.is_tensor(vv):
+        #                print(f"  target[{k}][{kk}]: {tuple(vv.shape)} {vv.dtype}")
+
+        return inputs, targets
+
     def _generate_dummy_data(self, idx):
         """Generate completely random dummy data for CI testing."""
         inputs = {}
@@ -297,6 +307,7 @@ class Mu3eDataset(Dataset):
                 targets[f"particle_{field}"] = x.unsqueeze(0)
 
         return inputs, targets
+
 
 class Mu3eDataModule(LightningDataModule):
     def __init__(
