@@ -29,7 +29,7 @@ class Mu3eTracker(ModelWrapper):
 
         # Set the masks of any track slots that are not used as null
         pred_hit_masks = preds["track_hit_valid"]["track_hit_valid"] & pred_valid.unsqueeze(-1)
-        true_hit_masks = targets["track_hit_valid"] & true_valid.unsqueeze(-1)
+        true_hit_masks = targets["particle_hit_valid"] & true_valid.unsqueeze(-1)
 
         # Calculate the true/false positive rates between the predicted and true masks
         # Number of hits that were correctly assigned to the track
