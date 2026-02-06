@@ -87,6 +87,16 @@ class ModelWrapper(LightningModule):
     def training_step(self, batch: tuple[dict[str, Tensor], dict[str, Tensor]], batch_idx: int) -> dict[str, Tensor] | None:
         inputs, targets = batch
 
+        #if batch_idx == 1 and self.global_rank == 0:
+        #    print("\n=== TRAINING STEP INPUTS ===")
+        #    for k, v in inputs.items():
+        #        if torch.is_tensor(v):
+        #            print(f"inputs[{k}]: shape={tuple(v.shape)}, dtype={v.dtype}")
+        #    print("\n=== TRAINING STEP TARGETS ===")
+        #    for k, v in targets.items():
+        #        if torch.is_tensor(v):
+        #            print(f"targets[{k}]: shape={tuple(v.shape)}, dtype={v.dtype}")
+
         # Get the model outputs
         outputs = self.model(inputs)
 
