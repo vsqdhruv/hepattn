@@ -112,8 +112,8 @@ class Mu3eDataset(Dataset):
         if self.hit_volume_ids:
             hits = hits[hits["det"].isin(self.hit_volume_ids)].copy()
 
-        #for coord in ["x", "y", "z"]:
-        #    hits[coord] *= 0.01
+        for coord in ["x", "y", "z"]:
+            hits[coord] *= 0.01
             
         # Add extra hit fields
         hits["r"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2)
