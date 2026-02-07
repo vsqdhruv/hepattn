@@ -1,36 +1,22 @@
 seed_everything: 42
-name: TRK-v0-full
+name: mu3e-test-tracking
 
 data:
   # isambard
-  train_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/test
+  train_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/train
   val_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/val
-  test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/train
-  #hit_eval_train: /projects/u5du/pduckett/filter_evals/eta2p5pt600/epoch=100-val_loss=0.15778_train_eval.h5
-  #hit_eval_val: /projects/u5du/pduckett/filter_evals/eta2p5pt600/epoch=100-val_loss=0.15778_val_eval.h5
-  #hit_eval_test: /projects/u5du/pduckett/filter_evals/eta2p5pt600/epoch=100-val_loss=0.15778_test_eval.h5
+  test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/test
   
-  num_workers: 10
+  num_workers: 4
   num_train: -1
   num_test: -1
   num_val: -1
 
-  # Select only hits from these detector volumes
-  # pix barrel: 8, pix endcap: 7, 9
-  # See: https://competitions.codalab.org/competitions/20112
-  #hit_volume_ids: [7, 8, 9]
-
-  # Minimum pt for a particle to be deemed reconstructible - dont need for Mu3e
-  #particle_min_pt: 0.6
-
-  # Maximum absolute eta for a particle to be deemed reconstructible - dont need for Mu3e
-  #particle_max_abs_eta: 2.5
-
   # Minimum number of true hits for a particle to be deemed reconstructible
-  particle_min_num_hits: 0
+  particle_min_num_hits: 4
 
   # Maximum number of reconstructable particles allowed in an event
-  event_max_num_particles: &num_objects 2100
+  event_max_num_particles: &num_objects 25
   strict_max_objects: false
 
   # Define which inputs will be available to the model
@@ -57,19 +43,13 @@ data:
 trainer:
   # Training stuff here
   max_epochs: 10
-  accelerator: gpu
+  accelerator: gpu #cpu
   devices: 1
   precision: bf16-mixed
   log_every_n_steps: 50
   default_root_dir: logs
   gradient_clip_val: 0.1
   enable_progress_bar: true
-
-  #profiler:
-  #  class_path: lightning.pytorch.profilers.PyTorchProfiler
-  #  init_args:
-  #    dirpath: ./profile_logs/
-  #    filename: profile.json
 
   logger:
     class_path: hepattn.utils.loggers.MyCometLogger
@@ -78,7 +58,6 @@ trainer:
       workspace: vsqdhruv
 
   callbacks:
-    #- class_path: hepattn.callbacks.Compile
     - class_path: hepattn.callbacks.InferenceTimer
     - class_path: hepattn.callbacks.SaveConfig
     - class_path: hepattn.callbacks.Checkpoint
@@ -155,17 +134,17 @@ model:
       encoder:
         class_path: hepattn.models.Encoder
         init_args:
-          num_layers: 10
+          num_layers: 10 #1
           dim: *dim
-          attn_type: flash
-          window_size: 512
-          window_wrap: true
+          attn_type: flash #torch
+          window_size: 512 #None
+          window_wrap: false
           hybrid_norm: true
           norm: RMSNorm
           dense_kwargs: {activation: SwiGLU}
 
       decoder:
-        num_decoder_layers: 4
+        num_decoder_layers: 4 #1
         num_queries: *num_objects
         mask_attention: true
         use_query_masks: false
@@ -207,15 +186,15 @@ model:
                     in_features: *dim
                     out_features: *dim
                 losses:
-                  mask_dice: 2.0
-                  mask_focal: 50.0
+                  mask_dice: 5.0 #2.0
+                  mask_focal: 2.0 #50.0
                 costs:
-                  mask_dice: 2.0
-                  mask_focal: 50.0
+                  mask_dice: 5.0 #2.0
+                  mask_focal: 2.0 #50.0
                 null_weight: 1.0
 
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
           default_solver: scipy
-          adaptive_solver: true
+          adaptive_solver: false 
