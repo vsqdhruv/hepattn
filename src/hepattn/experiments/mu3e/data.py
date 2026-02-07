@@ -115,6 +115,10 @@ class Mu3eDataset(Dataset):
         # Scale spatial coordinates into 0-1 range
         for coord in ["x", "y", "z"]:
             hits[coord] *= 0.01
+
+        for coord in ["px", "py", "pz"]:
+            particles[coord] *= 0.01
+            hits[coord] *= 0.01
             
         # Add extra hit fields
         hits["r"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2)
