@@ -112,6 +112,7 @@ class Mu3eDataset(Dataset):
         if self.hit_volume_ids:
             hits = hits[hits["det"].isin(self.hit_volume_ids)].copy()
 
+        # Scale spatial coordinates into 0-1 range
         for coord in ["x", "y", "z"]:
             hits[coord] *= 0.01
             
