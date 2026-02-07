@@ -34,9 +34,9 @@ class SaveConfig(Callback):
             if isinstance(trainer.logger, CometLogger):
                 for file in log_dir.glob("*.yaml"):
                     trainer.logger.experiment.log_asset(file)
-                base_dir = Path(__file__).parents[3]
-                for file in (base_dir / "src").glob("**/*.py"):
-                    trainer.logger.experiment.log_code(file)
+                #base_dir = Path(__file__).parents[3]
+                #for file in (base_dir / "src").glob("**/*.py"):
+                #    trainer.logger.experiment.log_code(file)
 
             self.already_saved = True
 
