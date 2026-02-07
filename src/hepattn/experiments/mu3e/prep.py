@@ -11,18 +11,18 @@ def is_valid_file(path):
     path = Path(path)
     return path.is_file() and path.stat().st_size > 0
 
-def load_real_event_data(path_in, path_out):
+def load_real_event_data(path_in):
     print('Loading global hit and track data, compiling events...')
     track_fields = ["tid", "pdg", "vx", "vy", "vz", "vt", "px", "py", "pz"]
     hit_fields = ["tid", "hid", "det", "pdg", "x", "y", "z", "time", "edep", "px", "py", "pz"]
-    
-    with uproot.open(Path(in_dir)) as file:
+        
+    with uproot.open(path_in) as file:
         # pd.DataFrame of track and hit data from mu3e tree - only with chosen fields
         tracks_flat = file['mu3e_mc_tracks'].arrays(track_fields, library="pd")
         hits_flat = file['mu3e_mchits'].arrays(hit_fields, library="pd")
 
         # jagged awkward array - each entry in jagged array = list of hit indices in mchits tree, each list = one event
-        hit_mapping = file["mu3e"]["hit_mc_i"].array(library='ak') 
+        hit_mapping = file["mu3e"]["hit_mc_i"].array(library='ak')
 
     # dataframe tidying    
     global_track_df = tracks_flat.rename(columns={'tid': 'trackID'})
@@ -30,18 +30,35 @@ def load_real_event_data(path_in, path_out):
         
     return global_track_df, global_hit_df, hit_mapping
 
-def root_to_parquet(in_dir: str, out_dir: str, event_limit: int=None):
+def hit_sorter(col):
+    return col.abs().astype(np.int64)
+
+def root_to_parquet(
+    in_dir: str, 
+    train_dir: str, 
+    val_dir: str, 
+    test_dir: str, 
+    event_batch: int,
+    event_limit: int=None, 
+    save_to_parquet: bool = True
+):
     """
     Convert ROOT file to 2 parquet files (tracks and hits) with original eventID column.
     For hits without an associated event, assigns eventID : -1.
     """   
     path_in = Path(in_dir)
-    path_out = Path(out_dir)
-    path_out.mkdir(parents=True, exist_ok=True)
+    
+    path_train = Path(train_dir)
+    path_val = Path(val_dir)
+    path_test = Path(test_dir)
+    
+    path_train.mkdir(parents=True, exist_ok=True)
+    path_val.mkdir(parents=True, exist_ok=True)
+    path_test.mkdir(parents=True, exist_ok=True)
     
     ### loading hit and track dataframes ###
-    global_track_df, global_hit_df, hit_mapping = load_real_event_data(path_in, path_out)
-    
+    global_track_df, global_hit_df, hit_mapping = load_real_event_data(path_in)
+        
     ### mapping events ###
     print('Mapping events...')
     # flattening into one long numpy array of hit indices - all the hits in mchits that are included in monte carlo eventing
@@ -68,20 +85,107 @@ def root_to_parquet(in_dir: str, out_dir: str, event_limit: int=None):
     else:
         print('Ordering dataframes...')
         
-    # sorting eventID and trackID
-    global_hit_df = global_hit_df.sort_values(['eventID', 'trackID']).reset_index(drop=True)
-    global_track_df = global_track_df.sort_values(['eventID', 'trackID']).reset_index(drop=True)
+    ### sorting eventID and trackID ###
+    global_hit_df = global_hit_df.sort_values(['eventID', 'trackID'])
+    global_track_df = global_track_df.sort_values(['eventID', 'trackID'])
     
-    # save to single parquet files
-    print("Saving tracks to parquet...")
-    global_track_df.to_parquet(path_out / "all_tracks.parquet", index=False)
+    sensor_hits = global_hit_df[global_hit_df['det']==10]
+    valid_sensor_hits = sensor_hits[sensor_hits['eventID']!=-1].reset_index(drop=True)
+    valid_global_tracks = global_track_df[global_track_df['eventID']!=-1].reset_index(drop=True)
     
-    print("Saving hits to parquet...")
-    global_hit_df.to_parquet(path_out / "all_hits.parquet", index=False)
+    ### dropping split tracks ###
+    print('Dropping split tracks...')
+    track_event_counts = valid_sensor_hits.groupby('trackID')['eventID'].nunique()
+    split_tracks = track_event_counts[track_event_counts > 1].index
+
+    valid_sensor_hits = valid_sensor_hits[~valid_sensor_hits['trackID'].isin(split_tracks)].reset_index(drop=True)
+    valid_global_tracks = valid_global_tracks[~valid_global_tracks['trackID'].isin(split_tracks)].reset_index(drop=True)
     
-    print("\n--- Done ---")
-    print(f"Saved {len(global_track_df['eventID'].unique())} events to:")
-    print(f"  - {path_out / 'all_tracks.parquet'}")
-    print(f"  - {path_out / 'all_hits.parquet'}")
+    ### enforcing event level consistency ###
+    hit_events = valid_sensor_hits['eventID'].unique()
+    particle_events = valid_global_tracks['eventID'].unique()
+
+    common_events = set(hit_events) & set(particle_events)
+
+    valid_sensor_hits = valid_sensor_hits[valid_sensor_hits['eventID'].isin(common_events)]
+    valid_global_tracks = valid_global_tracks[valid_global_tracks['eventID'].isin(common_events)]
     
-    return global_track_df, global_hit_df
+    ### restricting to 4-hit or more particle tracks ###
+    print('Restricting to 4-hit particle tracks...')
+    counts = valid_sensor_hits['trackID'].value_counts()
+    keep_particle_ids = counts[counts >= 4].index.to_numpy()
+
+    valid_sensor_hits = valid_sensor_hits[valid_sensor_hits['trackID'].isin(keep_particle_ids)].reset_index(drop=True)
+    valid_global_tracks = valid_global_tracks[valid_global_tracks['trackID'].isin(keep_particle_ids)].reset_index(drop=True)
+    
+    # sanity check
+    bad = valid_sensor_hits.groupby('trackID').size()
+    bad = bad[bad < 4]
+
+    assert bad.empty, f"Non-4-hit tracks found: {bad.head()}"
+    
+    ### sorting by hitID within track ###
+    print('Sorting hitID within tracks...')
+    valid_sensor_hits = valid_sensor_hits.sort_values(by=['trackID', 'hitID'], key=hit_sorter)
+    
+    ### merge events into larger batch ###
+    print(f'Merging events into batch of {event_batch}...')
+    valid_sensor_hits['eventID_old'] = valid_sensor_hits['eventID']
+    valid_global_tracks['eventID_old'] = valid_global_tracks['eventID']
+    
+    valid_sensor_hits['eventID'] = valid_sensor_hits['eventID_old'] // event_batch
+    valid_global_tracks['eventID'] = valid_global_tracks['eventID_old'] // event_batch
+
+    valid_global_tracks = valid_global_tracks.sort_values(
+        ["eventID", "trackID"]
+    ).reset_index(drop=True)
+
+    ### sanity checks ###
+    assert valid_sensor_hits.groupby("trackID")["eventID"].nunique().max() == 1
+    assert set(valid_sensor_hits["eventID"].unique()) == set(
+        valid_global_tracks["eventID"].unique()
+    )
+    
+    print('Separating into train, val, test groups...')
+    total_events = valid_sensor_hits['eventID'].max()
+    train_hits = valid_sensor_hits[valid_sensor_hits["eventID"] < int(0.75*total_events)]
+    train_tracks = valid_global_tracks[valid_global_tracks["eventID"] < int(0.75*total_events)]
+    
+    val_hits = valid_sensor_hits[(valid_sensor_hits["eventID"] >= int(0.75*total_events)) & (valid_sensor_hits["eventID"] < int(0.875*total_events))]
+    val_tracks = valid_global_tracks[(valid_global_tracks["eventID"] >= int(0.75*total_events)) & (valid_global_tracks["eventID"] < int(0.875*total_events))]
+    
+    test_hits = valid_sensor_hits[valid_sensor_hits["eventID"] >= int(0.875*total_events)]
+    test_tracks = valid_global_tracks[valid_global_tracks["eventID"] >= int(0.875*total_events)]
+
+    ### saving to single parquet files ###
+    if save_to_parquet:
+        print("Saving hits to parquet...")
+        train_hits.to_parquet(path_train / "all_hits.parquet", index=False)
+        val_hits.to_parquet(path_val / "all_hits.parquet", index=False)    
+        test_hits.to_parquet(path_test / "all_hits.parquet", index=False)
+
+        print("Saving tracks to parquet...")
+        train_tracks.to_parquet(path_train / "all_tracks.parquet", index=False)
+        val_tracks.to_parquet(path_val / "all_tracks.parquet", index=False)    
+        test_tracks.to_parquet(path_test / "all_tracks.parquet", index=False)
+
+        print("\n--- Done ---")
+        print(f"Saved {len(train_tracks['eventID'].unique())} events to:")
+        print(f"  - {path_train / 'all_tracks.parquet'}")
+        print(f"  - {path_train / 'all_hits.parquet'}")
+        print()
+        print(f"Saved {len(val_tracks['eventID'].unique())} events to:")
+        print(f"  - {path_val / 'all_tracks.parquet'}")
+        print(f"  - {path_val / 'all_hits.parquet'}")
+        print()
+        print(f"Saved {len(test_tracks['eventID'].unique())} events to:")
+        print(f"  - {path_test / 'all_tracks.parquet'}")
+        print(f"  - {path_test / 'all_hits.parquet'}")
+    else:
+        print("\n--- Done ---")
+        print(f"Saved {len(valid_sensor_hits['eventID'].unique())} events to:")
+        print(f"  - valid_sensor_hits")
+        print(f"  - valid_global_tracks")
+        print()
+    
+    return global_track_df, global_hit_df, valid_sensor_hits, valid_global_tracks
