@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=mu3e-train-tracking
+#SBATCH --job-name=mu3e-train-tracking-hID-enabled
 #SBATCH -p GPU
 #SBATCH --nodes=1
 #SBATCH --export=ALL
