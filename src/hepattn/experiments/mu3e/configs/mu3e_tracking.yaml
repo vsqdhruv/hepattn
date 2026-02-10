@@ -30,6 +30,8 @@ data:
       - s
       - lambda
       - phi
+      - cosphi
+      - sinphi
       - eta
       - u
       - v
@@ -110,13 +112,15 @@ model:
                   - lambda
                   - eta
                   - phi
+                  - cosphi
+                  - sinphi
                   - u
                   - v
                   - s
                 net:
                   class_path: hepattn.models.Dense
                   init_args:
-                    input_size: 10
+                    input_size: 12
                     hidden_layers: [128]
                     output_size: *dim
                     activation: SwiGLU
@@ -127,7 +131,8 @@ model:
                     fields:
                       - r
                       - eta
-                      - phi
+                      - cosphi
+                      - sinphi
                     dim: *dim
                     scale: 0.1
 
@@ -136,7 +141,7 @@ model:
         init_args:
           num_layers: 10 #1
           dim: *dim
-          attn_type: flash #torch
+          attn_type: flash-varlen #torch
           window_size: 512 #None
           window_wrap: false
           hybrid_norm: true

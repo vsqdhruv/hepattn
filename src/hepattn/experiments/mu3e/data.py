@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pathlib import Path
 
 import h5py
@@ -128,6 +129,8 @@ class Mu3eDataset(Dataset):
         hits["eta"] = -np.log(np.tan(hits["lambda"] / 2))
         hits["u"] = hits["x"] / (hits["x"] ** 2 + hits["y"] ** 2)
         hits["v"] = hits["y"] / (hits["x"] ** 2 + hits["y"] ** 2)
+        hits["cosphi"] = np.cos(hits["phi"])
+        hits["sinphi"] = np.sin(hits["phi"])
 
         # Add extra particle fields
         particles["p"] = np.sqrt(particles["px"] ** 2 + particles["py"] ** 2 + particles["pz"] ** 2)
