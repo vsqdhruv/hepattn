@@ -7,7 +7,7 @@ data:
   val_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/val
   test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/test
   
-  num_workers: 4
+  num_workers: 10
   num_train: -1
   num_test: -1
   num_val: -1
@@ -30,11 +30,10 @@ data:
       - s
       - lambda
       - phi
-      - cosphi
-      - sinphi
       - eta
       - u
       - v
+      - hitID
 
   targets:
     particle:
@@ -44,7 +43,7 @@ data:
 
 trainer:
   # Training stuff here
-  max_epochs: 10
+  max_epochs: 40
   accelerator: gpu #cpu
   devices: 1
   precision: bf16-mixed
@@ -65,10 +64,13 @@ trainer:
     - class_path: hepattn.callbacks.Checkpoint
       init_args:
         monitor: val/loss
+        mode: min
+        save_top_k: 1
+        save_last: true
     - class_path: hepattn.callbacks.PredictionWriter
       init_args:
         write_inputs: false
-        write_outputs: true
+        write_outputs: false
         write_preds: true
         write_targets: true
         write_losses: false
@@ -82,10 +84,10 @@ model:
 
   # Learning rate scheduler config
   lrs_config:
-    initial: 1e-5
+    initial: 5e-6 #1e-5
     max: 5e-5
-    end: 1e-5
-    pct_start: 0.05
+    end: 1e-6 #1e-5
+    pct_start: 0.1 #0.05
     skip_scheduler: false
     weight_decay: 1e-5
 
@@ -96,7 +98,7 @@ model:
     class_path: hepattn.models.MaskFormer
     init_args:
       dim: &dim 256
-      input_sort_field: phi
+      input_sort_field: z
       input_nets:
         class_path: torch.nn.ModuleList
         init_args:
@@ -112,15 +114,13 @@ model:
                   - lambda
                   - eta
                   - phi
-                  - cosphi
-                  - sinphi
                   - u
                   - v
                   - s
                 net:
                   class_path: hepattn.models.Dense
                   init_args:
-                    input_size: 12
+                    input_size: 10
                     hidden_layers: [128]
                     output_size: *dim
                     activation: SwiGLU
@@ -131,15 +131,15 @@ model:
                     fields:
                       - r
                       - eta
-                      - cosphi
-                      - sinphi
+                      - phi
+                      - hitID
                     dim: *dim
                     scale: 0.1
 
       encoder:
         class_path: hepattn.models.Encoder
         init_args:
-          num_layers: 10 #1
+          num_layers: 8 #10 #1
           dim: *dim
           attn_type: flash-varlen #torch
           window_size: 512 #None
@@ -191,11 +191,11 @@ model:
                     in_features: *dim
                     out_features: *dim
                 losses:
-                  mask_dice: 5.0 #2.0
-                  mask_focal: 2.0 #50.0
+                  mask_dice: 2.0 #5.0
+                  mask_focal: 50.0 #2.0
                 costs:
-                  mask_dice: 5.0 #2.0
-                  mask_focal: 2.0 #50.0
+                  mask_dice:  2.0 #5.0
+                  mask_focal: 50.0 #2.0
                 null_weight: 1.0
 
       matcher:
