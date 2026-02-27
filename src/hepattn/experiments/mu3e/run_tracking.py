@@ -18,14 +18,17 @@ class Mu3eTracker(ModelWrapper):
     ):
         super().__init__(name, model, lrs_config, optimizer, mtl)
 
-    def log_custom_metrics(self, preds, targets, stage):
+    def log_custom_metrics(self, preds, targets, stage, inputs):
         # Just log predictions from the final layer
         preds = preds["final"]
 
         # First log metrics that depend on outputs from multiple tasks
         # TODO: Make the task names configurable or match task names automatically
-        pred_valid = preds["track_valid"]["track_valid"]
-        true_valid = targets["particle_valid"]
+        pred_valid = preds["track_valid"]["track_valid"]    # [batch, queries]
+        true_valid = targets["particle_valid"]              # [batch, particles]
+
+        # Pull hitIDs from inputs
+        true_hitIDs = inputs["hit_hitID"].float().abs()  # [batch, num_hits]
 
         # Set the masks of any track slots that are not used as null
         pred_hit_masks = preds["track_hit_valid"]["track_hit_valid"] & pred_valid.unsqueeze(-1)
@@ -41,7 +44,7 @@ class Mu3eTracker(ModelWrapper):
         # True number of hits on the track
         hit_t = true_hit_masks.sum(-1)
 
-        # Calculate the efficiency and purity at differnt matching working points
+        # Calculate the efficiency and purity at different matching working points
         for wp in [0.5, 0.75, 1.0]:
             both_valid = true_valid & pred_valid
 
