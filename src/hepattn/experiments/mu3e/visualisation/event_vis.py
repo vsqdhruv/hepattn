@@ -8,15 +8,15 @@ def t2n(x):
     '''torch to numpy convertor'''
     return x.detach().cpu().numpy()
 
-def plot_mu3e_dual_view(inputs, targets):
+def plot_mu3e_dual_view(inputs, targets, batch_number):
     '''event visualiser - takes torch dataloader input and target dicts as input
        plots what model "sees"
        '''
-    b = 0  # since batch_size = 1
+    b = batch_number  # since batch_size = 1
     plt.style.use('default')
 
     # extract event id
-    eventID = int(targets['sample_id'][b].item()) # using sample_id from targets dict
+    eventID = int(targets['sample_id'][batch_number].item()) # using sample_id from targets dict
     
     # setup figure
     fig, (ax1, ax2) = plt.subplots(
@@ -28,10 +28,10 @@ def plot_mu3e_dual_view(inputs, targets):
     )
     
     # scale by 100 for mm scale
-    h_x = inputs["hit_x"][b].detach().cpu().numpy() * 100
-    h_y = inputs["hit_y"][b].detach().cpu().numpy() * 100
-    h_z = inputs["hit_z"][b].detach().cpu().numpy() * 100
-    valid_mask = inputs["hit_valid"][b].detach().cpu().numpy().astype(bool)
+    h_x = inputs["hit_x"][batch_number].detach().cpu().numpy() * 100
+    h_y = inputs["hit_y"][batch_number].detach().cpu().numpy() * 100
+    h_z = inputs["hit_z"][batch_number].detach().cpu().numpy() * 100
+    valid_mask = inputs["hit_valid"][batch_number].detach().cpu().numpy().astype(bool)
 
     # XY Plane
     ax1.set_xlim(-100, 100)
@@ -60,8 +60,8 @@ def plot_mu3e_dual_view(inputs, targets):
     ax2.add_patch(target2)
 
     # plot tracks
-    particle_hit_val = targets["particle_hit_valid"][b].detach().cpu().numpy()
-    particle_valid = targets["particle_valid"][b].detach().cpu().numpy().astype(bool)
+    particle_hit_val = targets["particle_hit_valid"][batch_number].detach().cpu().numpy()
+    particle_valid = targets["particle_valid"][batch_number].detach().cpu().numpy().astype(bool)
     num_particles = np.sum(particle_valid)
     
     for p_idx in range(particle_hit_val.shape[0]):
@@ -95,4 +95,114 @@ def plot_mu3e_dual_view(inputs, targets):
     
     plt.tight_layout()
 
+    return fig, eventID
+
+
+def plot_mu3e_tri_view(inputs, targets, batch_number):
+    '''event visualiser - takes torch dataloader input and target dicts as input
+       plots what model "sees"
+       '''
+    plt.style.use('default')
+
+    # extract event id
+    eventID = int(targets['sample_id'][batch_number].item()) # using sample_id from targets dict
+    
+    # setup figure
+    fig, (ax1, ax2, ax3) = plt.subplots(
+        1, 3, 
+        figsize=(20, 5.2), 
+        dpi=200, 
+        sharey=False, 
+        gridspec_kw={'width_ratios': [1, 1, 2.2]}
+    )
+    
+    # scale by 100 for mm scale
+    h_x = inputs["hit_x"][batch_number].detach().cpu().numpy() * 100
+    h_y = inputs["hit_y"][batch_number].detach().cpu().numpy() * 100
+    h_z = inputs["hit_z"][batch_number].detach().cpu().numpy() * 100
+
+    # conformal mapping
+    h_u = inputs["hit_u"][batch_number].detach().cpu().numpy()
+    h_v = inputs["hit_v"][batch_number].detach().cpu().numpy()
+    
+    valid_mask = inputs["hit_valid"][batch_number].detach().cpu().numpy().astype(bool)
+
+    # XY Plane
+    ax1.set_title("X-Y Plane")
+    ax1.set_xlim(-100, 100)
+    ax1.set_ylim(-100, 100)
+    ax1.set_aspect('equal')
+    ax1.plot(0, 0, 'x', color='black', alpha=0.5)
+    for r in [23.3, 29.8, 73.9, 86.3]:
+        ax1.add_patch(Circle((0, 0), r, color='black', lw=0.3, fill=False))
+    ax1.add_patch(Circle((0, 0), 19, color='green', alpha=0.1, label='Target'))
+
+    # UV Plane
+    ax2.set_title("U-V Plane")
+    ax2.set_xlim(-5, 5)
+    ax2.set_ylim(-5, 5)
+    ax2.set_aspect('equal')
+
+    # ZY Plane
+    ax3.set_title("Z-Y Plane")
+    ax3.set_xlim(-230, 210)
+    ax3.set_ylim(-100, 100)
+    ax3.set_aspect('equal')
+    ax3.plot(0, 0, 'x', color='black', alpha=0.5)
+    # detector layer Z-bounds (Phase I)
+    ax3.hlines(y=[+23.3, -23.3], xmin=-62.35,  xmax=62.35,  color='black', lw=0.3)
+    ax3.hlines(y=[+29.8, -29.8], xmin=-62.35,  xmax=62.35,  color='black', lw=0.3)
+    ax3.hlines(y=[+73.9, -73.9], xmin=-175.95, xmax=175.95, color='black', lw=0.3)
+    ax3.hlines(y=[+86.3, -86.3], xmin=-186.3,  xmax=186.3,  color='black', lw=0.3)
+    
+    # Mu3e Stopping Target
+    tgt1 = Polygon(np.array([[-50, 0], [0, 19], [0, -19]]), closed=True, color='green', alpha=0.1)
+    tgt2 = Polygon(np.array([[50, 0], [0, 19], [0, -19]]), closed=True, color='green', alpha=0.1)
+    ax3.add_patch(tgt1)
+    ax3.add_patch(tgt2)
+
+    # 6. Plot Tracks
+    p_hit_val = targets["particle_hit_valid"][batch_number].detach().cpu().numpy()
+    p_valid = targets["particle_valid"][batch_number].detach().cpu().numpy().astype(bool)
+    num_particles = np.sum(p_valid)
+    
+    for p_idx in range(p_hit_val.shape[0]):
+        if not p_valid[p_idx]: 
+            continue
+        
+        # Mask hits belonging to this particle that are also valid
+        this_p_mask = p_hit_val[p_idx].astype(bool) & valid_mask
+        if not np.any(this_p_mask): 
+            continue
+        
+        x_p, y_p, z_p, u_p, v_p = h_x[this_p_mask], h_y[this_p_mask], h_z[this_p_mask], h_u[this_p_mask], h_v[this_p_mask]
+
+        # Plot XY Projection
+        line, = ax1.plot(x_p, y_p, '--', alpha=0.2, lw=1)
+        color = line.get_color()
+        ax1.plot(x_p, y_p, '.', color=color, markersize=5)
+
+        # Plot UV Projection
+        ax2.plot(u_p, v_p, '--', alpha=0.2, lw=1, color=color)
+        ax2.plot(u_p, v_p, '.', color=color, markersize=5)
+
+        # Plot ZY Projection
+        ax3.plot(z_p, y_p, '--', alpha=0.2, lw=1, color=color)
+        ax3.plot(z_p, y_p, '.', color=color, markersize=5, label=f'P{p_idx}')
+
+    # 7. Labels & Polishing
+    plt.suptitle(f'Mu3e Event {eventID} | Particles: {num_particles}', fontsize=18)
+    ax1.set_xlabel('x [mm]')
+    ax1.set_ylabel('y [mm]')
+    ax2.set_xlabel('u [1/mm]')
+    ax2.set_ylabel('v [1/mm]')
+    ax3.set_ylabel('y [mm]')
+    ax3.set_xlabel('z [mm]')
+    
+    ax1.grid(alpha=0.1)
+    ax2.grid(alpha=0.1)
+    ax3.grid(alpha=0.1)
+    ax3.legend(loc='center left', fontsize='x-small', title="Truth Tracks")
+    
+    plt.tight_layout()
     return fig, eventID
