@@ -14,6 +14,31 @@ def is_valid_file(path):
     path = Path(path)
     return path.is_file() and path.stat().st_size > 0
 
+def pad_last_dim(x, L):
+    if x.size(-1) == L:
+        return x
+    pad_val = False if x.dtype == torch.bool else 0
+    y = x.new_full((*x.shape[:-1], L), pad_val)
+    y[..., :x.size(-1)] = x
+    return y
+
+def collate_dict(dicts):
+    out = {}
+    for k in dicts[0]:
+        xs = [d[k] for d in dicts]
+
+        if torch.is_tensor(xs[0]) and xs[0].dim() > 0:
+            Lmax = max(x.size(-1) for x in xs)
+            xs = [pad_last_dim(x, Lmax) for x in xs]
+
+        out[k] = torch.cat(xs, dim=0) if torch.is_tensor(xs[0]) else xs
+    
+    return out
+
+def mu3e_collate(batch):
+    inputs_list, targets_list = zip(*batch)
+    return collate_dict(inputs_list), collate_dict(targets_list)
+
 class Mu3eDataset(Dataset):
     def __init__(
         self,
@@ -53,7 +78,7 @@ class Mu3eDataset(Dataset):
             self.event_max_num_particles = event_max_num_particles
             return
 
-        # loading in event data
+        # Load in event data
         self.dirpath = Path(dirpath)
         self.all_hits = pd.read_parquet(self.dirpath / Path("all_hits.parquet"))
         self.all_tracks = pd.read_parquet(self.dirpath / Path("all_tracks.parquet"))
@@ -126,7 +151,7 @@ class Mu3eDataset(Dataset):
         hits["s"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2 + hits["z"] ** 2)
         hits["lambda"] = np.arccos(hits["z"] / hits["s"])
         hits["phi"] = np.arctan2(hits["y"], hits["x"])
-        hits["eta"] = -np.log(np.tan(hits["lambda"] / 2))
+        hits["eta"] = np.arctanh(hits["z"] / hits["s"])
         hits["u"] = hits["x"] / (hits["x"] ** 2 + hits["y"] ** 2)
         hits["v"] = hits["y"] / (hits["x"] ** 2 + hits["y"] ** 2)
         hits["cosphi"] = np.cos(hits["phi"])
@@ -384,8 +409,8 @@ class Mu3eDataModule(LightningDataModule):
     def get_dataloader(self, stage: str, dataset: Mu3eDataset, shuffle: bool):
         return DataLoader(
             dataset=dataset,
-            batch_size=None,
-            collate_fn=None,
+            batch_size=100,
+            collate_fn=mu3e_collate,
             sampler=None,
             num_workers=self.num_workers,
             shuffle=shuffle,
