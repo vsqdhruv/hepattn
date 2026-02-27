@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=mu3e-train-tracking-hID-enabled
+#SBATCH --job-name=mu3e-train-tracking
 #SBATCH -p GPU
 #SBATCH --nodes=1
 #SBATCH --export=ALL
@@ -28,8 +28,11 @@ echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 cd /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/
 echo "Moved dir, now in: ${PWD}"
 
-# Set tmpdir
-export TMPDIR=/var/tmp/
+mkdir -p /share/data1/xzcapnai/tmp/
+export TMPDIR=/share/data1/xzcapnai/tmp/
+
+export JOBLIB_TEMP_FOLDER=/var/tmp/xzcapnai_joblib
+mkdir -p $JOBLIB_TEMP_FOLDER
 
 echo "nvidia-smi:"
 nvidia-smi
@@ -44,7 +47,9 @@ PYTORCH_CMD="python run_tracking.py fit --config configs/mu3e_tracking.yaml"
 PIXI_CMD="pixi run $PYTORCH_CMD"
 
 # Apptainer command that runs the pixi command inside the pixi apptainer image
-APPTAINER_CMD="srun apptainer run --nv --bind /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e \
+APPTAINER_CMD="srun apptainer run --nv \
+						--bind /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e \
+						--bind /share:/share
 						 /home/xzcapnai/hepattn/hepattn/pixi.sif $PIXI_CMD"
 
 # Run the final command
