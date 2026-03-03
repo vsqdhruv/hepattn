@@ -22,6 +22,16 @@ def pad_last_dim(x, L):
     y[..., :x.size(-1)] = x
     return y
 
+def pad_last_two_dim(x, L):
+    """Pads the last two dimensions to L x L (for N x N matrices)."""
+    if x.size(-1) == L and x.size(-2) == L:
+        return x
+    pad_val = False if x.dtype == torch.bool else 0
+    new_shape = (*x.shape[:-2], L, L)
+    y = x.new_full(new_shape, pad_val)
+    y[..., :x.size(-2), :x.size(-1)] = x
+    return y
+
 def collate_dict(dicts):
     out = {}
     for k in dicts[0]:
@@ -29,7 +39,11 @@ def collate_dict(dicts):
 
         if torch.is_tensor(xs[0]) and xs[0].dim() > 0:
             Lmax = max(x.size(-1) for x in xs)
-            xs = [pad_last_dim(x, Lmax) for x in xs]
+
+            if 'succession_mask' in k or (xs[0].dim() >= 2 and xs[0].size(-1) == xs[0].size(-2)):
+                xs = [pad_last_two_dim(x, Lmax) for x in xs]
+            else:
+                xs = [pad_last_dim(x, Lmax) for x in xs]
 
         out[k] = torch.cat(xs, dim=0) if torch.is_tensor(xs[0]) else xs
     
@@ -149,24 +163,32 @@ class Mu3eDataset(Dataset):
         # Add extra hit fields
         hits["r"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2)
         hits["s"] = np.sqrt(hits["x"] ** 2 + hits["y"] ** 2 + hits["z"] ** 2)
-        hits["lambda"] = np.arccos(hits["z"] / hits["s"])
-        hits["phi"] = np.arctan2(hits["y"], hits["x"])
         hits["eta"] = np.arctanh(hits["z"] / hits["s"])
+
+        hits["lambda"] = np.arccos(hits["z"] / hits["s"])
+        hits["coslambda"] = hits["z"] / hits["s"]
+        hits["sinlambda"] = hits["r"] / hits["s"]
+
+        hits["phi"] = np.arctan2(hits["y"], hits["x"])
+        hits["cosphi"] = hits["x"] / hits["s"]
+        hits["sinphi"] = hits["y"] / hits["s"]
+        
         hits["u"] = hits["x"] / (hits["x"] ** 2 + hits["y"] ** 2)
         hits["v"] = hits["y"] / (hits["x"] ** 2 + hits["y"] ** 2)
-        hits["cosphi"] = np.cos(hits["phi"])
-        hits["sinphi"] = np.sin(hits["phi"])
 
         # Add extra particle fields
         particles["p"] = np.sqrt(particles["px"] ** 2 + particles["py"] ** 2 + particles["pz"] ** 2)
         particles["pt"] = np.sqrt(particles["px"] ** 2 + particles["py"] ** 2)
         particles["eta"] = np.arctanh(particles["pz"] / particles["p"])
+        particles["signed_pt"] = particles["charge"] * particles["pt"]
+
         particles["lambda"] = np.arccos(particles["pz"] / particles["p"])
+        particles["coslambda"] = particles["pz"] / particles["p"]
+        particles["sinlambda"] = particles["pt"] / particles["p"]
+
         particles["phi"] = np.arctan2(particles["py"], particles["px"])
-        particles["coslambda"] = np.cos(particles["lambda"])
-        particles["sinlambda"] = np.sin(particles["lambda"])
-        particles["cosphi"] = np.cos(particles["phi"])
-        particles["sinphi"] = np.sin(particles["phi"])
+        particles["sinphi"] = particles["py"] / particles["pt"] 
+        particles["cosphi"] = particles["px"] / particles["pt"]
 
         # Apply particle cut based on hit content
         counts = hits["trackID"].value_counts()
@@ -264,6 +286,22 @@ class Mu3eDataset(Dataset):
                     particles[field].to_numpy()[: self.event_max_num_particles]
                 )
                 targets[f"particle_{field}"] = x.unsqueeze(0)
+
+        # Get particle index for each hit
+        hit_particle_idxs = hits["particle_idx"].values
+        num_hits = len(hit_particle_idxs)
+
+        # Generate Succession Mask (N_hits, N_hits)
+        succession_mask = torch.zeros((num_hits, num_hits), dtype=torch.bool)
+
+        # two hits are successors if they share particle_idx and are adjacent
+        same_particle = (hit_particle_idxs[:-1] == hit_particle_idxs[1:])
+
+        # fill [i, i+1] positions
+        indices = np.where(same_particle)[0]
+        succession_mask[indices, indices+1] = True
+
+        targets["hit_succession_mask"] = succession_mask.unsqueeze(0)
 
         # __getitem__ shape 
         #print(f"\n[DEBUG __getitem__ idx={idx}]")
