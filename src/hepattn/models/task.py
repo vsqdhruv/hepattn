@@ -343,6 +343,116 @@ class ObjectHitMaskTask(Task):
                 output, target, object_valid_mask=object_pad, input_pad_mask=hit_pad, sample_weight=sample_weight
             )
         return losses
+    
+class HitSuccesionTask(Task):
+    def __init__(
+        self,
+        name: str,
+        input_constituent: str,
+        losses: dict[str, float],
+        dim: int,
+        src_net: nn.Module | None = None,
+        dst_net: nn.Module | None = None,
+        null_weight: float = 1.0,
+        logit_scale: float = 1.0,
+        pred_threshold: float = 0.5,
+        has_intermediate_loss: bool = True,
+    ):
+        super().__init__(has_intermediate_loss=has_intermediate_loss)
+        self.name = name
+        self.input_constituent = input_constituent
+        self.losses = losses
+        self.dim = dim
+
+        self.permute_loss = False
+
+        self.src_net = src_net or nn.Linear(dim, dim)
+        self.dst_net = dst_net or nn.Linear(dim, dim)
+        
+        self.null_weight = null_weight
+        self.logit_scale = logit_scale
+        self.pred_threshold = pred_threshold
+
+        self.inputs = [f"{input_constituent}_embed"]
+        self.outputs = [f"{name}_logit"]
+
+    def forward(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
+        # Get embeddings [Batch, L, Dim]
+        h = x[f"{self.input_constituent}_embed"]
+        
+        # Hit-hit dot product with symmetry breaking
+        src = self.src_net(h) # source [B, L, D] 
+        dst = self.dst_net(h) # destination [B, L, D]
+        logits = self.logit_scale * torch.einsum("bnc,bmc->bnm", src, dst) # [B, L, L]
+        
+
+        #  Apply time-ordering mask (only predict i -> j where j > i)
+        L = logits.size(-1)
+        causal = torch.tril(torch.ones(L, L, device=logits.device)).bool()
+        logits.masked_fill(causal.unsqueeze(0), torch.finfo(logits.dtype).min)
+
+        # Mask out padded entries
+        if (hit_valid_mask := x.get(f"{self.input_constituent}_valid")) is not None:
+            hit_valid_2d_mask = hit_valid_mask.unsqueeze(-1) & hit_valid_mask.unsqueeze(-2)
+            neg_inf = torch.finfo(logits.dtype).min
+            logits.masked_fill(~hit_valid_2d_mask, neg_inf)
+
+        return {f"{self.name}_logit": logits}
+    
+    def cost(self, outputs, targets):
+        return {} # not used for anything
+
+    def predict(self, outputs):
+        return {f"{self.name}_valid": outputs[f"{self.name}_logit"].detach().sigmoid() >= self.pred_threshold}
+    
+    def loss(self, outputs, targets):
+        logits = outputs[f"{self.name}_logit"]
+        # ompare to the succession mask from dataloader
+        target = targets["hit_succession_mask"].to(logits.dtype) # convert bool -> float for BCE
+        
+        # Only compute loss on valid (non-padded) hit pairs
+        hit_valid_mask = targets[f"{self.input_constituent}_valid"]
+        hit_valid_2d_mask = hit_valid_mask.unsqueeze(-1) & hit_valid_mask.unsqueeze(-2)
+        
+        # Boolean mask flattens to 1D
+        logits_valid = logits[hit_valid_2d_mask]
+        target_valid = target[hit_valid_2d_mask]
+
+        # Sample weight to soften class imbalance
+        sample_weight = target_valid + self.null_weight * (1 - target_valid)
+        
+        losses = {}
+        for loss_fn_name, weight in self.losses.items():
+            losses[loss_fn_name] = weight * loss_fns[loss_fn_name](
+                logits_valid, target_valid, sample_weight=sample_weight
+            )
+        return losses
+    
+    def metric(self, outputs, targets):
+        preds = self.predict(outputs)[f"{self.name}_valid"]
+        truth = targets["hit_succession_mask"].bool()
+
+        L = truth.size(-1)
+        causal = torch.tril(torch.ones(L, L, device=truth.device)).bool()
+        truth = truth & ~causal.unsqueeze(0)
+
+        hit_valid_mask = targets[f"{self.input_constituent}_valid"]
+        hit_valid_2d_mask = hit_valid_mask.unsqueeze(-1) & hit_valid_mask.unsqueeze(-2)
+    
+        preds_valid = preds[hit_valid_2d_mask]
+        truth_valid = truth[hit_valid_2d_mask]
+
+        true_pos = (preds_valid & truth_valid).sum().float()
+        false_pos = (preds_valid & ~truth_valid).sum().float()
+        false_neg = (~preds_valid & truth_valid).sum().float()
+
+        eff = true_pos / (true_pos + false_neg + 1e-8)
+        pur = true_pos / (true_pos + false_pos + 1e-8)
+
+        return {
+        f"{self.name}_efficiency": eff.item(),
+        f"{self.name}_purity": pur.item()
+    }   
 
 
 class RegressionTask(Task):
