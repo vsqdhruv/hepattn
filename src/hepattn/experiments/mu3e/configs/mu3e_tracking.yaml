@@ -22,24 +22,30 @@ data:
   # Define which inputs will be available to the model
   inputs:
     hit:
-      # Global hit coords
+      # spatial
       - x
       - y
       - z
       - r
       - s
+      # angular
       - lambda
       - phi
       - eta
+      # conformal
       - u
       - v
+      # structural
       - hitID
 
   targets:
     particle:
       - pt
-      - eta
-      - phi
+      - signed_pt
+      - sinphi
+      - cosphi
+      - sinlambda
+      - coslambda
 
 trainer:
   # Training stuff here
@@ -101,7 +107,7 @@ model:
       input_sort_field: z
       input_nets:
         class_path: torch.nn.ModuleList
-        init_args:
+        init_args: 
           modules:
             - class_path: hepattn.models.InputNet
               init_args:
@@ -177,6 +183,7 @@ model:
                 costs:
                   object_bce: 1.0
                 null_weight: 1.0
+
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: track_hit_valid
@@ -198,7 +205,42 @@ model:
                   mask_focal: 50.0 #2.0
                 null_weight: 1.0
 
-      matcher:
+            - class_path: hepattn.models.task.HitSuccessionTask
+              init_args
+                name: hit_succession
+                input_constituent: hit
+                dim: *dim
+                src_net: 
+                  class_path: torch.nn.Linear
+                  init_args:
+                    in_features: *dim
+                    out_features: *dim
+                dst_net:
+                  class_path: torch.nn.Linear
+                  init_args: 
+                    in_features: *dim
+                    out_features: *dim
+                losses:
+                  object_bce: 10.0
+                null_weight: 1.0
+            
+            #- class_path: hepattn.models.task.ObjectGaussianRegressionTask
+            #  inite_args:
+            #    name: track_params
+            #    input_object: query
+            #    output_object: track
+            #    target_object: particle
+            #    fields:
+            #      - pt
+            #      - sinphi
+            #      - cosphi
+            #      - sinlambda
+            #      - coslambda
+            #    loss_weight: 1.0
+            #    cost_weight: 1.0
+            #    dim: *dim
+
+      matcher: 
         class_path: hepattn.models.matcher.Matcher
         init_args:
           default_solver: scipy
