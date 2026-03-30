@@ -328,6 +328,8 @@ class Mu3eDataset(Dataset):
                 )
                 targets[f"particle_{field}"] = x.unsqueeze(0)
 
+
+        ### HIT ORDERING FUNCTIONALITY IS BROKEN -- NEEDS TO BE FIXED ###    
         # Get particle index for each hit
         #hit_particle_idxs = hits["particle_idx"].values
         #num_hits = len(hit_particle_idxs)
@@ -344,6 +346,8 @@ class Mu3eDataset(Dataset):
 
         #targets["hit_succession_mask"] = succession_mask.unsqueeze(0)
 
+
+        ### ERROR DEBUGGING ###
         # __getitem__ shape 
         #print(f"\n[DEBUG __getitem__ idx={idx}]")
         #for k, v in inputs.items():
