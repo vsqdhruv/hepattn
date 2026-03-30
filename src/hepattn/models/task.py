@@ -4,21 +4,24 @@ from typing import Literal
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
 from hepattn.models.dense import Dense
-from hepattn.models.loss import cost_fns, loss_fns, mask_focal_loss
+from hepattn.models.loss import cost_fns, loss_fns, mask_focal_loss, mixed_regr_loss
 from hepattn.utils.masks import topk_attn
 from hepattn.utils.scaling import FeatureScaler
 
+from functools import partial
 # Mapping of loss function names to torch.nn.functional loss functions
 REGRESSION_LOSS_FNS = {
     "l1": torch.nn.functional.l1_loss,
     "l2": torch.nn.functional.mse_loss,
     "smooth_l1": torch.nn.functional.smooth_l1_loss,
+    "mixed_regression_loss": mixed_regr_loss
 }
 
 # Define the literal type for regression losses based on the dictionary keys
-RegressionLossType = Literal["l1", "l2", "smooth_l1"]
+RegressionLossType = Literal["l1", "l2", "smooth_l1", "mixed_regression_loss"]
 
 
 class Task(nn.Module, ABC):
@@ -344,7 +347,7 @@ class ObjectHitMaskTask(Task):
             )
         return losses
     
-class HitSuccesionTask(Task):
+class HitOrderingTask(Task):
     def __init__(
         self,
         name: str,
@@ -356,9 +359,9 @@ class HitSuccesionTask(Task):
         null_weight: float = 1.0,
         logit_scale: float = 1.0,
         pred_threshold: float = 0.5,
-        has_intermediate_loss: bool = True,
+        has_intermediate_loss: bool = False,
     ):
-        super().__init__(has_intermediate_loss=has_intermediate_loss)
+        super().__init__(has_intermediate_loss=has_intermediate_loss, permute_loss=False)
         self.name = name
         self.input_constituent = input_constituent
         self.losses = losses
@@ -389,18 +392,18 @@ class HitSuccesionTask(Task):
         #  Apply time-ordering mask (only predict i -> j where j > i)
         L = logits.size(-1)
         causal = torch.tril(torch.ones(L, L, device=logits.device)).bool()
-        logits.masked_fill(causal.unsqueeze(0), torch.finfo(logits.dtype).min)
+        logits = logits.masked_fill(causal.unsqueeze(0), torch.finfo(logits.dtype).min)
 
         # Mask out padded entries
         if (hit_valid_mask := x.get(f"{self.input_constituent}_valid")) is not None:
             hit_valid_2d_mask = hit_valid_mask.unsqueeze(-1) & hit_valid_mask.unsqueeze(-2)
             neg_inf = torch.finfo(logits.dtype).min
-            logits.masked_fill(~hit_valid_2d_mask, neg_inf)
+            logits = logits.masked_fill(~hit_valid_2d_mask, neg_inf)
 
         return {f"{self.name}_logit": logits}
     
-    def cost(self, outputs, targets):
-        return {} # not used for anything
+    #def cost(self, outputs, targets):
+    #    return {} # not used for anything
 
     def predict(self, outputs):
         return {f"{self.name}_valid": outputs[f"{self.name}_logit"].detach().sigmoid() >= self.pred_threshold}
@@ -486,7 +489,7 @@ class RegressionTask(Task):
         self.target_object = target_object
         self.fields = fields
         self.loss_weight = loss_weight
-        self.cost_weight = cost_weight
+        self.cost_weight = cost_weight 
         self.loss_fn_name = loss
         self.loss_fn = REGRESSION_LOSS_FNS[loss]
         self.k = len(fields)
@@ -719,6 +722,7 @@ class ObjectRegressionTask(RegressionTask):
         cost_weight: float,
         dim: int,
         loss: RegressionLossType = "smooth_l1",
+        pt_scale: float = 0.1,
         has_intermediate_loss: bool = True,
     ):
         """Regression task for objects.
@@ -744,6 +748,14 @@ class ObjectRegressionTask(RegressionTask):
         self.dim = dim
         self.net = Dense(self.dim, self.ndofs)
 
+        self.pt_scale = pt_scale
+
+        if loss == 'mixed_regression_loss':
+            self.loss_fn = partial(mixed_regr_loss, fields=self.fields, pt_scale=self.pt_scale)
+            self.cost_loss_fn = torch.nn.functional.smooth_l1_loss
+        else:
+            self.cost_loss_fn = self.loss_fn
+
     def latent(self, x: dict[str, Tensor]) -> Tensor:
         return self.net(x[self.input_object + "_embed"])
 
@@ -753,7 +765,7 @@ class ObjectRegressionTask(RegressionTask):
         num_objects = output.shape[1]
         # Index from the front so it works for both object and mask regression
         # The expand is not necessary but stops a broadcasting warning from smooth_l1_loss
-        costs = self.loss_fn(
+        costs = self.cost_loss_fn(
             output.unsqueeze(2).expand(-1, -1, num_objects, -1),
             target.unsqueeze(1).expand(-1, num_objects, -1, -1),
             reduction="none",
