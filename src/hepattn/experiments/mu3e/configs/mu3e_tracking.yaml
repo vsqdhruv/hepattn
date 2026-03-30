@@ -16,7 +16,7 @@ data:
   particle_min_num_hits: 4
 
   # Maximum number of reconstructable particles allowed in an event
-  event_max_num_particles: &num_objects 25
+  event_max_num_particles: &num_objects 30
   strict_max_objects: false
 
   # Define which inputs will be available to the model
@@ -205,40 +205,42 @@ model:
                   mask_focal: 50.0 #2.0
                 null_weight: 1.0
 
-            - class_path: hepattn.models.task.HitSuccessionTask
-              init_args
-                name: hit_succession
-                input_constituent: hit
-                dim: *dim
-                src_net: 
-                  class_path: torch.nn.Linear
-                  init_args:
-                    in_features: *dim
-                    out_features: *dim
-                dst_net:
-                  class_path: torch.nn.Linear
-                  init_args: 
-                    in_features: *dim
-                    out_features: *dim
-                losses:
-                  object_bce: 10.0
-                null_weight: 1.0
+#            - class_path: hepattn.models.task.HitOrderingTask
+#              init_args:
+#                name: hit_order
+#                input_constituent: hit
+#                dim: *dim
+#                has_intermediate_loss: false
+#                src_net: 
+#                  class_path: torch.nn.Linear
+#                  init_args:
+#                    in_features: *dim
+#                    out_features: *dim
+#                dst_net:
+#                  class_path: torch.nn.Linear
+#                  init_args: 
+#                    in_features: *dim
+#                    out_features: *dim
+#                losses:
+#                  object_bce: 10.0
+#                null_weight: 1.0
             
-            #- class_path: hepattn.models.task.ObjectGaussianRegressionTask
-            #  inite_args:
-            #    name: track_params
-            #    input_object: query
-            #    output_object: track
-            #    target_object: particle
-            #    fields:
-            #      - pt
-            #      - sinphi
-            #      - cosphi
-            #      - sinlambda
-            #      - coslambda
-            #    loss_weight: 1.0
-            #    cost_weight: 1.0
-            #    dim: *dim
+            - class_path: hepattn.models.task.ObjectRegressionTask
+              init_args:
+                name: track_params
+                input_object: query
+                output_object: track
+                target_object: particle
+                fields:
+                  - pt
+                  - signed_pt
+                  - sinphi
+                  - cosphi
+                  - sinlambda
+                  - coslambda
+                loss_weight: 1.0
+                cost_weight: 1.0
+                dim: *dim
 
       matcher: 
         class_path: hepattn.models.matcher.Matcher
