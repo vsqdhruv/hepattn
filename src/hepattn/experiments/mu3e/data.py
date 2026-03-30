@@ -10,19 +10,7 @@ from lightning import LightningDataModule
 from lightning.pytorch.utilities.rank_zero import rank_zero_info
 from torch.utils.data import DataLoader, Dataset
 
-def is_valid_file(path):
-    path = Path(path)
-    return path.is_file() and path.stat().st_size > 0
-
-def pad_last_dim(x, L):
-    if x.size(-1) == L:
-        return x
-    pad_val = False if x.dtype == torch.bool else 0
-    y = x.new_full((*x.shape[:-1], L), pad_val)
-    y[..., :x.size(-1)] = x
-    return y
-
-def pad_last_two_dim(x, L):
+def pad_last_two_dim(x, L):  ### BROKEN NEEDS TO BE FIXED ###
     """Pads the last two dimensions to L x L (for N x N matrices)."""
     if x.size(-1) == L and x.size(-2) == L:
         return x
@@ -32,26 +20,79 @@ def pad_last_two_dim(x, L):
     y[..., :x.size(-2), :x.size(-1)] = x
     return y
 
+def is_valid_file(path):
+    """ returns True if path exists and is non-empty"""
+    path = Path(path)
+    return path.is_file() and path.stat().st_size > 0
+
+def pad_last_dim(x, L):
+    """ pads the last dimension of x to length L."""
+    if x.size(-1) == L:
+        return x
+    pad_val = False if x.dtype == torch.bool else 0
+    y = x.new_full((*x.shape[:-1], L), pad_val)
+    y[..., :x.size(-1)] = x
+    return y
+
 def collate_dict(dicts):
+    """ collates list of dicts of tensors into single dict. 
+        pads tensors along last dimension before concatenating """
     out = {}
     for k in dicts[0]:
         xs = [d[k] for d in dicts]
 
         if torch.is_tensor(xs[0]) and xs[0].dim() > 0:
             Lmax = max(x.size(-1) for x in xs)
-
-            if 'succession_mask' in k or (xs[0].dim() >= 2 and xs[0].size(-1) == xs[0].size(-2)):
-                xs = [pad_last_two_dim(x, Lmax) for x in xs]
-            else:
-                xs = [pad_last_dim(x, Lmax) for x in xs]
+            xs = [pad_last_dim(x, Lmax) for x in xs]
 
         out[k] = torch.cat(xs, dim=0) if torch.is_tensor(xs[0]) else xs
     
     return out
 
+def collate_dict_diagnostic(dicts):
+    """ same as collate_dict but with error logging for shape mismatches
+        prints informative messages before raising """
+    out = {}
+    for k in dicts[0]:
+        xs = [d[k] for d in dicts]
+
+        if torch.is_tensor(xs[0]) and xs[0].dim() > 0:
+            # --- DIAGNOSTIC START ---
+            shapes_before = [x.shape for x in xs]
+            # Check if dimensions other than the last one are inconsistent
+            # (e.g., trying to cat (1, 83) and (83,) will fail)
+            dims_consistent = all(len(s) == len(shapes_before[0]) for s in shapes_before)
+            
+            if not dims_consistent:
+                print(f"\n❌ DIMENSION MISMATCH on Key: '{k}'")
+                print(f"Some tensors are 1D, some are 2D. Shapes: {shapes_before[:5]}")
+            # --- DIAGNOSTIC END ---
+
+            Lmax = max(x.size(-1) for x in xs)
+            xs = [pad_last_dim(x, Lmax) for x in xs]
+
+        if torch.is_tensor(xs[0]):
+            try:
+                out[k] = torch.cat(xs, dim=0)
+            except RuntimeError as e:
+                # This catches the "83 vs 43" error specifically
+                print(f"\n" + "="*60)
+                print(f"FAILED TO CONCATENATE KEY: '{k}'")
+                print(f"Error: {e}")
+                print(f"Lmax used for padding: {Lmax if 'Lmax' in locals() else 'N/A'}")
+                print(f"Shapes AFTER padding (first 5): {[x.shape for x in xs[:5]]}")
+                print("="*60 + "\n")
+                raise e
+        else:
+            out[k] = xs
+    
+    return out
+
 def mu3e_collate(batch):
+    """ custom collate function for mu3e dataloader.
+        unpacks (input, target) pairsand collates each separately. """
     inputs_list, targets_list = zip(*batch)
-    return collate_dict(inputs_list), collate_dict(targets_list)
+    return collate_dict_diagnostic(inputs_list), collate_dict_diagnostic(targets_list)
 
 class Mu3eDataset(Dataset):
     def __init__(
@@ -288,20 +329,20 @@ class Mu3eDataset(Dataset):
                 targets[f"particle_{field}"] = x.unsqueeze(0)
 
         # Get particle index for each hit
-        hit_particle_idxs = hits["particle_idx"].values
-        num_hits = len(hit_particle_idxs)
+        #hit_particle_idxs = hits["particle_idx"].values
+        #num_hits = len(hit_particle_idxs)
 
         # Generate Succession Mask (N_hits, N_hits)
-        succession_mask = torch.zeros((num_hits, num_hits), dtype=torch.bool)
+        #succession_mask = torch.zeros((num_hits, num_hits), dtype=torch.bool)
 
         # two hits are successors if they share particle_idx and are adjacent
-        same_particle = (hit_particle_idxs[:-1] == hit_particle_idxs[1:])
+        #same_particle = (hit_particle_idxs[:-1] == hit_particle_idxs[1:])
 
         # fill [i, i+1] positions
-        indices = np.where(same_particle)[0]
-        succession_mask[indices, indices+1] = True
+        #indices = np.where(same_particle)[0]
+        #succession_mask[indices, indices+1] = True
 
-        targets["hit_succession_mask"] = succession_mask.unsqueeze(0)
+        #targets["hit_succession_mask"] = succession_mask.unsqueeze(0)
 
         # __getitem__ shape 
         #print(f"\n[DEBUG __getitem__ idx={idx}]")
@@ -320,6 +361,12 @@ class Mu3eDataset(Dataset):
         #        for kk, vv in v.items():
         #            if torch.is_tensor(vv):
         #                print(f"  target[{k}][{kk}]: {tuple(vv.shape)} {vv.dtype}")
+                
+        #for k, v in targets.items():
+        #    if torch.is_tensor(v) and v.dim() == 1:
+        #        # This is the danger zone! 
+        #        # If one event has (83,) and another has (43,), cat(dim=0) will CRASH.
+        #        print(f"⚠️ DANGER: Key '{k}' is 1D with shape {v.shape} and type {v.dtype}")
 
         return inputs, targets
 
@@ -447,7 +494,7 @@ class Mu3eDataModule(LightningDataModule):
     def get_dataloader(self, stage: str, dataset: Mu3eDataset, shuffle: bool):
         return DataLoader(
             dataset=dataset,
-            batch_size=100,
+            batch_size=150,
             collate_fn=mu3e_collate,
             sampler=None,
             num_workers=self.num_workers,
