@@ -1,3 +1,5 @@
+#### loss.py ####
+
 import torch
 import torch.nn.functional as F
 
@@ -347,6 +349,27 @@ def regr_mse_cost(pred, targets):
 def regr_smooth_l1_cost(pred, targets):
     return torch.nn.functional.smooth_l1_loss(pred.unsqueeze(-2), targets.unsqueeze(-3), reduction="none")
 
+def mixed_regr_loss(pred, targets, fields, reduction='none', eps=0.1, pt_scale=0.1):
+    pred = pred.float()
+    targets = targets.float()
+    
+    pt_idx = fields.index('signed_pt') 
+    other_idx = [i for i in range(pred.shape[-1]) if i != pt_idx]
+
+    # relative L1 for signed_pt
+    pt_pred = pred[..., pt_idx:pt_idx+1]
+    pt_target = targets[..., pt_idx:pt_idx+1]
+    relative = pt_scale * torch.abs(pt_pred - pt_target) / (torch.abs(pt_target) + eps)
+
+    # smooth L1 for angular fields
+    absolute = F.smooth_l1_loss(pred[..., other_idx], targets[..., other_idx], reduction="none")
+
+    # reconstruct in original field order
+    loss = torch.zeros_like(pred)
+    loss[..., pt_idx] = relative.squeeze(-1)
+    loss[..., other_idx] = absolute
+
+    return loss
 
 cost_fns = {
     "object_bce": torch.compile(object_bce_cost, dynamic=True),
