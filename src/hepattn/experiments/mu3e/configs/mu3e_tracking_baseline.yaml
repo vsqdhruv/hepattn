@@ -1,0 +1,248 @@
+seed_everything: 42
+name: mu3e-test-tracking-baseline
+
+data:
+  # isambard
+  train_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/train_3x_v2
+  val_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/val_3x_v2
+  test_dir: /home/xzcapnai/hepattn/hepattn/src/hepattn/experiments/mu3e/data/test_3x_v2
+  
+  num_workers: 10
+  num_train: -1
+  num_test: -1
+  num_val: -1
+
+  # Minimum number of true hits for a particle to be deemed reconstructible
+  particle_min_num_hits: 4
+
+  # Maximum number of reconstructable particles allowed in an event
+  event_max_num_particles: &num_objects 30
+  strict_max_objects: false
+
+  # Define which inputs will be available to the model
+  inputs:
+    hit:
+      # spatial
+      - x
+      - y
+      - z
+      - r
+      - s
+      # angular
+      - lambda
+      - phi
+      - eta
+      # conformal
+      - u
+      - v
+      # structural
+      - hitID
+
+  targets:
+    particle:
+      - signed_pt
+      - sinphi
+      - cosphi
+      - sinlambda
+      - coslambda
+
+trainer:
+  # Training stuff here
+  max_epochs: 40
+  accelerator: gpu #cpu
+  devices: 1
+  precision: bf16-mixed
+  log_every_n_steps: 50
+  default_root_dir: logs
+  gradient_clip_val: 0.1
+  enable_progress_bar: true
+
+  logger:
+    class_path: hepattn.utils.loggers.MyCometLogger
+    init_args:
+      project: ml-4-track-recon-mu3e
+      workspace: vsqdhruv
+
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/loss
+        mode: min
+        save_top_k: 1
+        save_last: true
+    - class_path: hepattn.callbacks.PredictionWriter
+      init_args:
+        write_inputs: false
+        write_outputs: false
+        write_preds: true
+        write_targets: true
+        write_losses: false
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+
+model:
+  optimizer: Lion
+
+  # Learning rate scheduler config
+  lrs_config:
+    initial: 5e-6 #1e-5
+    max: 5e-5
+    end: 1e-6 #1e-5
+    pct_start: 0.1 #0.05
+    skip_scheduler: false
+    weight_decay: 1e-5
+
+  # Whether to use multi task learning or not
+  mtl: false
+
+  model:
+    class_path: hepattn.models.MaskFormer
+    init_args:
+      dim: &dim 256
+      input_sort_field: z
+      input_nets:
+        class_path: torch.nn.ModuleList
+        init_args: 
+          modules:
+            - class_path: hepattn.models.InputNet
+              init_args:
+                input_name: hit
+                fields:
+                  - x
+                  - y
+                  - z
+                  - r
+                  - lambda
+                  - eta
+                  - phi
+                  - u
+                  - v
+                  - s
+                net:
+                  class_path: hepattn.models.Dense
+                  init_args:
+                    input_size: 10
+                    hidden_layers: [128]
+                    output_size: *dim
+                    activation: SwiGLU
+                posenc:
+                  class_path: hepattn.models.FourierPositionEncoder
+                  init_args:
+                    input_name: hit
+                    fields:
+                      - r
+                      - eta
+                      - phi
+                      - hitID
+                    dim: *dim
+                    scale: 0.1
+
+      encoder:
+        class_path: hepattn.models.Encoder
+        init_args:
+          num_layers: 8 #10 #1
+          dim: *dim
+          attn_type: flash-varlen #torch
+          window_size: 512 #None
+          window_wrap: false
+          hybrid_norm: true
+          norm: RMSNorm
+          dense_kwargs: {activation: SwiGLU}
+
+      decoder:
+        num_decoder_layers: 4 #1
+        num_queries: *num_objects
+        mask_attention: true
+        use_query_masks: false
+        decoder_layer_config:
+          dim: *dim
+          norm: RMSNorm
+          hybrid_norm: true
+          dense_kwargs: {activation: SwiGLU}
+
+      tasks:
+        class_path: torch.nn.ModuleList
+        init_args:
+          modules:
+            - class_path: hepattn.models.task.ObjectValidTask
+              init_args:
+                name: track_valid
+                input_object: query
+                output_object: track
+                target_object: particle
+                has_intermediate_loss: true
+                has_first_layer_loss: false
+                dim: *dim
+                losses:
+                  object_bce: 1.0
+                costs:
+                  object_bce: 1.0
+                null_weight: 1.0
+
+            - class_path: hepattn.models.task.ObjectHitMaskTask
+              init_args:
+                name: track_hit_valid
+                input_constituent: hit
+                input_object: query
+                output_object: track
+                target_object: particle
+                dim: *dim
+                constituent_net:
+                  class_path: torch.nn.Linear
+                  init_args:
+                    in_features: *dim
+                    out_features: *dim
+                losses:
+                  mask_dice: 2.0 #5.0
+                  mask_focal: 25.0 #2.0
+                costs:
+                  mask_dice:  2.0 #5.0
+                  mask_focal: 25.0 #2.0
+                null_weight: 1.0
+
+#            - class_path: hepattn.models.task.HitOrderingTask
+#              init_args:
+#                name: hit_order
+#                input_constituent: hit
+#                dim: *dim
+#                has_intermediate_loss: false
+#                src_net: 
+#                  class_path: torch.nn.Linear
+#                  init_args:
+#                    in_features: *dim
+#                    out_features: *dim
+#                dst_net:
+#                  class_path: torch.nn.Linear
+#                  init_args: 
+#                    in_features: *dim
+#                    out_features: *dim
+#                losses:
+#                  object_bce: 10.0
+#                null_weight: 1.0
+            
+            - class_path: hepattn.models.task.ObjectRegressionTask
+              init_args:
+                name: track_params
+                input_object: query
+                output_object: track
+                target_object: particle
+                fields:
+                  - signed_pt
+                  - sinphi
+                  - cosphi
+                  - sinlambda
+                  - coslambda
+                loss_weight: 5.0
+                cost_weight: 5.0
+                dim: *dim
+                loss: smooth_l1
+
+      matcher: 
+        class_path: hepattn.models.matcher.Matcher
+        init_args:
+          default_solver: scipy
+          adaptive_solver: false 
